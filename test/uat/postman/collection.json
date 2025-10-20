@@ -1,0 +1,22 @@
+{
+    "info": { "name": "SIT Smoke", "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json" },
+    "item": [
+      {
+        "name": "Orders readiness",
+        "request": { "method": "GET", "url": "{{baseUrl}}/orders/actuator/health/readiness" },
+        "event": [{ "listen":"test","script":{"exec":["pm.test('200 OK',()=>pm.response.code===200);"]}}]
+      },
+      {
+        "name": "Place order (happy)",
+        "request": {
+          "method":"POST","header":[{"key":"Content-Type","value":"application/json"}],
+          "url":"{{baseUrl}}/orders/api/orders",
+          "body":{"mode":"raw","raw":"{\"sku\":\"SKU-123\",\"qty\":1}"}
+        },
+        "event":[{"listen":"test","script":{"exec":[
+          "pm.test('CONFIRMED or PENDING',()=>['CONFIRMED','PAYMENT_PENDING'].includes(pm.response.json().status));"
+        ]}}]
+      }
+    ]
+  }
+  

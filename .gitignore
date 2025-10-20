@@ -1,0 +1,45 @@
+# OS / editors
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.code-workspace
+
+# Logs / temp
+*.log
+*.tmp
+temp/
+tmp/
+
+# Kubernetes / secrets / keys
+.kube/
+kubeconfig
+*.kubeconfig
+*.crt
+*.key
+*.pem
+
+# Kustomize/Helm rendered outputs (if you ever generate them locally)
+**/*rendered*.yaml
+**/*compiled*.yaml
+**/kustomize.build.yaml
+helmfile.yaml.lock
+
+# Secrets by pattern (allow encrypted forms)
+ops/**/secret*.yaml
+ops/**/*secret*.yaml
+ops/**/secrets/*.yaml
+# keep encrypted secrets
+!ops/**/*.(sops|enc).yaml
+
+# Postman / Newman
+test/**/newman/
+test/**/reports/
+*.junit.xml
+coverage/
+
+# Node / Python (if you run Newman locally or scripts)
+node_modules/
+.venv/
