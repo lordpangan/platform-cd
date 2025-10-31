@@ -31,11 +31,15 @@ jobs:
       - uses: azure/setup-kubectl@v4
       - uses: imranismail/setup-kustomize@v2
 
-      - name: Set Kube context
-        uses: azure/k8s-set-context@v4
-        with:
-          method: kubeconfig
-          kubeconfig: ${{ secrets.KUBECONFIG }}
+      - name: Write kubeconfig from base64
+        run: |
+          printf '%s' "${KUBECONFIG_B64}" | base64 -d > "$RUNNER_TEMP/kubeconfig"
+          echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> $GITHUB_ENV
+        env:
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG }}
+
+      # now kubectl works directly
+      - run: kubectl cluster-info
 
       - name: Determine tags (first 8 SHA by default)
         id: tags
