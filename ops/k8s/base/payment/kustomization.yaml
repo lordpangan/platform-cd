@@ -3,7 +3,6 @@ kind: Kustomization
 resources:
   - deployment.yaml
   - service.yaml
-  - ingress.yaml
 images:
   - name:  ghcr.io/lordpangan/payment-service
     newTag: local

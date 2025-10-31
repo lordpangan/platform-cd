@@ -47,3 +47,4 @@ platform-cd/
 ### TODO:
 - Add references to *Continuous Delivery* principles implemented in both `microservices-app` and `platform-cd`.
 - Document branching strategy, feature flow, and release candidate promotion process.
+- Add requirement for the ci-runner(what are the tools needed on the ci-runner)

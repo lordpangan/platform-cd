@@ -6,6 +6,7 @@ resources:
   - ../../base/orders
   - ../../base/inventory
   - ../../base/payment
+  - ingress.yaml
 images:
   - name: REGISTRY_PLACEHOLDER/orders-service
     newTag: ${ORDERS_TAG}
@@ -13,5 +14,3 @@ images:
     newTag: ${INVENTORY_TAG}
   - name: REGISTRY_PLACEHOLDER/payment-service
     newTag: ${PAYMENT_TAG}
-patches:
-  - path: patches/ingress-host.yaml
