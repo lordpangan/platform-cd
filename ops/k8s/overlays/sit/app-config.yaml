@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: sit  # change to your target namespace if needed
+data:
+  SPRING_PROFILES_ACTIVE: sit
