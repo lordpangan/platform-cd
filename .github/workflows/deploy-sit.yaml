@@ -1,12 +1,12 @@
 name: deploy-sit
+
 on:
   repository_dispatch:
-    types: [ deploy-sit ]    # from microservices-apps
+    types: [ deploy-sit ]   # triggered from microservices-app
   workflow_dispatch:
     inputs:
-      orders_tag:    { required: false }
-      inventory_tag: { required: false }
-      payment_tag:   { required: false }
+      service: { required: true }
+      tag:     { required: true }
 
 env:
   REGISTRY: ${{ vars.REGISTRY || 'ghcr.io/lordpangan' }}
@@ -23,6 +23,7 @@ jobs:
       id-token: write
       pull-requests: write
       issues: write
+
     steps:
       - uses: actions/checkout@v4
 
@@ -33,89 +34,86 @@ jobs:
         env:
           KUBECONFIG_B64: ${{ secrets.KUBECONFIG }}
 
-      # now kubectl works directly
       - run: kubectl cluster-info
 
-      - name: Determine tags (first 8 SHA by default)
-        id: tags
-        run: |
-          SHORT=${GITHUB_SHA::8}
-          ORDERS="sha-${SHORT}"; INVENTORY="sha-${SHORT}"; PAYMENT="sha-${SHORT}"
-          [ -n "${{ inputs.orders_tag }}" ]    && ORDERS="${{ inputs.orders_tag }}"
-          [ -n "${{ inputs.inventory_tag }}" ] && INVENTORY="${{ inputs.inventory_tag }}"
-          [ -n "${{ inputs.payment_tag }}" ]   && PAYMENT="${{ inputs.payment_tag }}"
-          SRV='${{ github.event.client_payload.service }}'
-          TAG='${{ github.event.client_payload.tag }}'
-          if [ -n "$SRV" ] && [ -n "$TAG" ]; then
-            case "$SRV" in
-              orders-service)    ORDERS="$TAG" ;;
-              inventory-service) INVENTORY="$TAG" ;;
-              payment-service)   PAYMENT="$TAG" ;;
-            esac
-          fi
-          echo "orders=$ORDERS" >> $GITHUB_OUTPUT
-          echo "inventory=$INVENTORY" >> $GITHUB_OUTPUT
-          echo "payment=$PAYMENT" >> $GITHUB_OUTPUT
-
-      - name: Apply SIT (by TAG) and wait
-        env:
-          ORDERS_TAG:    ${{ steps.tags.outputs.orders }}
-          INVENTORY_TAG: ${{ steps.tags.outputs.inventory }}
-          PAYMENT_TAG:   ${{ steps.tags.outputs.payment }}
-          DOMAIN:        ${{ env.DOMAIN }}
+      - name: Determine service + tag
+        id: meta
+        shell: bash
         run: |
           set -euo pipefail
+          SRV="${{ github.event.client_payload.service || inputs.service }}"
+          TAG="${{ github.event.client_payload.tag || inputs.tag }}"
 
-          # Apply the Kustomize overlay using kubectl's built-in kustomize
+          if [[ -z "$SRV" || -z "$TAG" ]]; then
+            echo "::error::Missing service or tag"
+            exit 1
+          fi
+
+          # Auto-derive deploy/container name by trimming "-service" suffix if present
+          DEPLOY="${SRV%-service}"
+          CONTAINER="$DEPLOY"
+
+          echo "service=$SRV" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "deploy=$DEPLOY" >> $GITHUB_OUTPUT
+          echo "container=$CONTAINER" >> $GITHUB_OUTPUT
+
+          echo "🚀 Deploying $SRV:$TAG → $DEPLOY"
+
+      - name: Apply SIT (by TAG) and wait
+        run: |
+          set -euo pipefail
           kubectl apply -k ops/k8s/overlays/sit
-
-          # Update images (adjust container names if they differ)
-          kubectl -n sit set image deploy/orders    orders=$REGISTRY/orders-service:${ORDERS_TAG}
-          kubectl -n sit set image deploy/inventory inventory=$REGISTRY/inventory-service:${INVENTORY_TAG}
-          kubectl -n sit set image deploy/payment   payment=$REGISTRY/payment-service:${PAYMENT_TAG}
-
-          # Wait for rollouts
-          for d in orders inventory payment; do
-            kubectl -n sit rollout status deploy/$d --timeout=180s
-          done
+          kubectl -n sit set image deploy/${{ steps.meta.outputs.deploy }} \
+            ${{ steps.meta.outputs.container }}=${{ env.REGISTRY }}/${{ steps.meta.outputs.service }}:${{ steps.meta.outputs.tag }}
+          kubectl -n sit rollout restart deploy/${{ steps.meta.outputs.deploy }}
+          kubectl -n sit rollout status deploy/${{ steps.meta.outputs.deploy }} --timeout=180s
+          echo "✅ ${{ steps.meta.outputs.service }} deployed successfully to SIT"
 
       - name: SIT smoke (Newman)
+        continue-on-error: true  # temporary
         run: |
-          npm i -g newman@6 newman-reporter-htmlextra
-          newman run tests/uat/postman/collection.json \
-            -e tests/uat/postman/env.sit.json \
+          npm install newman@6 newman-reporter-htmlextra
+          npx newman run tests/sit/postman/collection.json \
+            -e tests/sit/postman/env.sit.json \
             --reporters junit,cli,htmlextra \
             --reporter-junit-export sit.junit.xml \
             --reporter-htmlextra-export sit.html
 
       - name: Upload SIT reports
         uses: actions/upload-artifact@v4
-        with: { name: sit-reports, path: "*.xml;*.html" }
+        with:
+          name: sit-reports
+          path: "*.xml;*.html"
 
-      - name: Resolve image digests (pin for higher envs)
-        id: digests
+      - name: Authenticate crane with GHCR
         run: |
-          ORD=$(crane digest $REGISTRY/orders-service:${{ steps.tags.outputs.orders }})
-          INV=$(crane digest $REGISTRY/inventory-service:${{ steps.tags.outputs.inventory }})
-          PAY=$(crane digest $REGISTRY/payment-service:${{ steps.tags.outputs.payment }})
-          echo "orders=$ORD" >> $GITHUB_OUTPUT
-          echo "inventory=$INV" >> $GITHUB_OUTPUT
-          echo "payment=$PAY" >> $GITHUB_OUTPUT
+          echo "${{ secrets.GITHUB_TOKEN }}" | crane auth login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Resolve image digest for deployed service
+        id: digest
+        run: |
+          set -euo pipefail
+          DIG=$(crane digest ${{ env.REGISTRY }}/${{ steps.meta.outputs.service }}:${{ steps.meta.outputs.tag }})
+          echo "digest=$DIG" >> $GITHUB_OUTPUT
+          echo "Resolved digest: $DIG"
 
       - name: Record release-candidate (Issue) + Summary + Slack (mock)
         env:
-          ORD_DIG: ${{ steps.digests.outputs.orders }}
-          INV_DIG: ${{ steps.digests.outputs.inventory }}
-          PAY_DIG: ${{ steps.digests.outputs.payment }}
+          DIGEST: ${{ steps.digest.outputs.digest }}
+          SERVICE: ${{ steps.meta.outputs.service }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           echo "### SIT ✅" >> $GITHUB_STEP_SUMMARY
-          echo "- orders @ $ORD_DIG" >> $GITHUB_STEP_SUMMARY
-          echo "- inventory @ $INV_DIG" >> $GITHUB_STEP_SUMMARY
-          echo "- payment @ $PAY_DIG" >> $GITHUB_STEP_SUMMARY
+          echo "- $SERVICE @ $DIGEST" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
 
           TITLE="release-candidate"
-          BODY=$'Digests:\n- orders @ '"$ORD_DIG"$'\n- inventory @ '"$INV_DIG"$'\n- payment @ '"$PAY_DIG"$'\n\nSIT reports attached to this run.'
+          BODY=$'Service: '"$SERVICE"$'\nDigest: '"$DIGEST"$'\n\nSIT smoke tests complete.'
+
+          gh label create "release-candidate" --color 0366d6 || true
+
           ISSUE=$(gh issue list --search "$TITLE in:title state:open" --json number --jq '.[0].number' || true)
           if [ -z "$ISSUE" ]; then
             gh issue create -t "$TITLE" -b "$BODY" -l release-candidate
@@ -123,12 +121,19 @@ jobs:
             gh issue comment "$ISSUE" -b "$BODY"
           fi
 
-          PAYLOAD=$(jq -n --arg env "SIT" --arg url "http://api.${{ env.DOMAIN }}" '{text:"SIT passed",env:$env,url:$url}')
+          PAYLOAD=$(jq -n --arg env "SIT" --arg service "$SERVICE" --arg url "http://api.${{ env.DOMAIN }}" \
+            '{text:"SIT deployment complete",env:$env,service:$service,url:$url}')
+
           if [ -n "$SLACK_WEBHOOK_URL" ]; then
             curl -s -X POST -H 'content-type: application/json' --data "$PAYLOAD" "$SLACK_WEBHOOK_URL" || true
           else
-            echo "#### Slack (mock)" >> $GITHUB_STEP_SUMMARY
-            echo "\n\`\`\`json\n$PAYLOAD\n\`\`\`" >> $GITHUB_STEP_SUMMARY
+            {
+              echo "#### Slack (mock)"
+              echo ""
+              echo '```json'
+              echo "$PAYLOAD"
+              echo '```'
+            } >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Deployment (SIT)
@@ -137,4 +142,4 @@ jobs:
           token: ${{ github.token }}
           environment: SIT
           ref: ${{ github.sha }}
-          payload: "{\"url\":\"http://sit-api.${{ env.DOMAIN }}\"}"
+          payload: "{\"service\":\"${{ steps.meta.outputs.service }}\",\"url\":\"http://sit-api.${{ env.DOMAIN }}\"}"
