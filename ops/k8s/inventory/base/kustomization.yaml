@@ -3,6 +3,7 @@ kind: Kustomization
 resources:
   - deployment.yaml
   - service.yaml
+  
 images:
   - name:  ghcr.io/lordpangan/inventory-service
     newTag: local

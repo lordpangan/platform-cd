@@ -36,42 +36,61 @@ jobs:
 
       - run: kubectl cluster-info
 
-      - name: Determine service + tag
+      - name: Apply SIT common resources
+        run: |
+          set -euo pipefail
+          echo "🔧 Applying common SIT resources..."
+          kubectl apply -k ops/k8s/common/sit
+          echo "✅ Common SIT resources applied."
+
+      - name: Apply SIT (simple health loop)
         id: meta
-        shell: bash
         run: |
           set -euo pipefail
-          SRV="${{ github.event.client_payload.service || inputs.service }}"
-          TAG="${{ github.event.client_payload.tag || inputs.tag }}"
 
-          if [[ -z "$SRV" || -z "$TAG" ]]; then
-            echo "::error::Missing service or tag"
-            exit 1
-          fi
-
-          # Auto-derive deploy/container name by trimming "-service" suffix if present
-          DEPLOY="${SRV%-service}"
-          CONTAINER="$DEPLOY"
-
-          echo "service=$SRV" >> $GITHUB_OUTPUT
+          RAW_SERVICE=${{ github.event.client_payload.service || inputs.service }}
+          SERVICE=${RAW_SERVICE%-service}
+          TAG=${{ github.event.client_payload.tag || inputs.tag  }}
+          REGISTRY=${{ env.REGISTRY }}
+          echo "service=$RAW_SERVICE" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "deploy=$DEPLOY" >> $GITHUB_OUTPUT
-          echo "container=$CONTAINER" >> $GITHUB_OUTPUT
 
-          echo "🚀 Deploying $SRV:$TAG → $DEPLOY"
+          echo "🚀 Deploying $SERVICE:$TAG to SIT..."
 
-      - name: Apply SIT (by TAG) and wait
-        run: |
-          set -euo pipefail
-          kubectl apply -k ops/k8s/overlays/sit
-          kubectl -n sit set image deploy/${{ steps.meta.outputs.deploy }} \
-            ${{ steps.meta.outputs.container }}=${{ env.REGISTRY }}/${{ steps.meta.outputs.service }}:${{ steps.meta.outputs.tag }}
-          kubectl -n sit rollout restart deploy/${{ steps.meta.outputs.deploy }}
-          kubectl -n sit rollout status deploy/${{ steps.meta.outputs.deploy }} --timeout=180s
-          echo "✅ ${{ steps.meta.outputs.service }} deployed successfully to SIT"
+          pushd ops/k8s/${SERVICE}/sit > /dev/null
+            kubectl kustomize . \
+            | sed "s|ghcr.io/lordpangan/${RAW_SERVICE}:local|${REGISTRY}/${RAW_SERVICE}:${TAG}|g" \
+            | kubectl apply -f -
+            kubectl -n sit rollout restart deploy/$SERVICE
+          popd > /dev/null
+
+          echo "🔎 Checking health of $SERVICE for up to 5 minutes..."
+
+          for i in {1..5}; do
+            echo "⏱️  Attempt $i of 5..."
+            
+            # Check for image pull errors first
+            if kubectl -n sit get pods -l app=$SERVICE --no-headers 2>/dev/null \
+              | grep -E 'ImagePullBackOff|ErrImagePull'; then
+              echo "❌ Image pull error detected for $SERVICE"
+              exit 1
+            fi
+
+            # Check if deployment rollout succeeded
+            if kubectl -n sit rollout status deploy/$SERVICE --timeout=30s; then
+              echo "✅ $SERVICE successfully rolled out and healthy!"
+              exit 0
+            else
+              echo "⚠️  $SERVICE not ready yet, retrying in 60s..."
+              sleep 60
+            fi
+          done
+
+          echo "❌ $SERVICE failed to become healthy after 5 minutes."
+          kubectl -n sit describe deploy/$SERVICE | tail -n 50
+          exit 1
 
       - name: SIT smoke (Newman)
-        continue-on-error: true  # temporary
         run: |
           npm install newman@6 newman-reporter-htmlextra
           npx newman run tests/sit/postman/collection.json \

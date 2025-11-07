@@ -6,6 +6,17 @@ The goal of this project is to **showcase modern DevOps principles** — includi
 The application deployed through this repository comes from the companion repository **[microservices-app](https://github.com/lordpangan/microservices-app)** — a dummy Java microservices system. This repository covers the **Continuous Integration (CI)** side — including builds, tests, and image publishing — while this **platform-cd** repository focuses on the **Continuous Delivery and deployment orchestration** aspect.
 
 ---
+### TODO:
+- Add requirement for the ci-runner(what are the tools needed on the ci-runner)
+    - crane
+    - kubectl
+    - npm
+    - gh
+- need to handle multiple app deployment per run
+- We need a mechanism to redeploy if there are changes to k8s config and no app changes
+- on manual run its easy to mispell or mistype the services
+- Document branching strategy, feature flow, and release candidate promotion process.
+- Add references to *Continuous Delivery* principles implemented in both `microservices-app` and `platform-cd`.
 
 ### Tech Stack
 
@@ -41,10 +52,3 @@ platform-cd/
 | **STAGING** | Manual promotion after SIT | Manual GitHub Action trigger | For UAT and exploratory testing |
 | **PERF** | Optional non-functional testing | Manual | Load/performance validation |
 | **PROD** | Final production deployment | Manual + approvals | Requires release candidate verification |
-
----
-
-### TODO:
-- Add references to *Continuous Delivery* principles implemented in both `microservices-app` and `platform-cd`.
-- Document branching strategy, feature flow, and release candidate promotion process.
-- Add requirement for the ci-runner(what are the tools needed on the ci-runner)

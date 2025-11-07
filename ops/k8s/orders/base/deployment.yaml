@@ -22,9 +22,9 @@ spec:
         - name: orders
           image: ghcr.io/lordpangan/orders-service:local
           env:
-            - name: INVENTORY_URL
+            - name: INVENTORY_BASE_URL
               value: "http://inventory.sit.svc.cluster.local:8080"
-            - name: PAYMENT_URL
+            - name: PAYMENT_BASE_URL
               value: "http://payment.sit.svc.cluster.local:8080"
           readinessProbe:
             httpGet:
