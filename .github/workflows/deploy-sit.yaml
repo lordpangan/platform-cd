@@ -60,15 +60,58 @@ jobs:
 
           echo "🚀 Deploying $SRV:$TAG → $DEPLOY"
 
-      - name: Apply SIT (by TAG) and wait
+      - name: Apply SIT common resources
         run: |
           set -euo pipefail
-          kubectl apply -k ops/k8s/overlays/sit
-          kubectl -n sit set image deploy/${{ steps.meta.outputs.deploy }} \
-            ${{ steps.meta.outputs.container }}=${{ env.REGISTRY }}/${{ steps.meta.outputs.service }}:${{ steps.meta.outputs.tag }}
-          kubectl -n sit rollout restart deploy/${{ steps.meta.outputs.deploy }}
-          kubectl -n sit rollout status deploy/${{ steps.meta.outputs.deploy }} --timeout=180s
-          echo "✅ ${{ steps.meta.outputs.service }} deployed successfully to SIT"
+          echo "🔧 Applying common SIT resources..."
+          kubectl apply -k ops/k8s/common/sit
+          echo "✅ Common SIT resources applied."
+
+      - name: Apply SIT (simple health loop)
+        run: |
+          set -euo pipefail
+
+          RAW_SERVICE=${{ steps.meta.outputs.service }}
+          SERVICE=${RAW_SERVICE%-service}
+          TAG=${{ steps.meta.outputs.tag }}
+          REGISTRY=${{ env.REGISTRY }}
+
+          echo "🚀 Deploying $SERVICE:$TAG to SIT..."
+
+          pushd ops/k8s/${SERVICE}/sit > /dev/null
+            kubectl kustomize . \
+            | sed "s|ghcr.io/lordpangan/${RAW_SERVICE}:local|${REGISTRY}/${RAW_SERVICE}:${TAG}|g" \
+            | kubectl apply -f -
+            kubectl -n sit rollout restart deploy/$SERVICE
+          popd > /dev/null
+
+          echo "🔎 Checking health of $SERVICE for up to 5 minutes..."
+
+          for i in {1..5}; do
+            echo "⏱️  Attempt $i of 5..."
+            
+            # Check for image pull errors first
+            if kubectl -n sit get pods -l app=$SERVICE --no-headers 2>/dev/null \
+              | grep -E 'ImagePullBackOff|ErrImagePull'; then
+              echo "❌ Image pull error detected for $SERVICE"
+              kubectl -n sit describe pods -l app=$SERVICE | tail -n 50
+              exit 1
+            fi
+
+            # Check if deployment rollout succeeded
+            if kubectl -n sit rollout status deploy/$SERVICE --timeout=30s; then
+              echo "✅ $SERVICE successfully rolled out and healthy!"
+              exit 0
+            else
+              echo "⚠️  $SERVICE not ready yet, retrying in 60s..."
+              sleep 60
+            fi
+          done
+
+          echo "❌ $SERVICE failed to become healthy after 5 minutes."
+          kubectl -n sit get pods -l app=$SERVICE
+          kubectl -n sit describe deploy/$SERVICE | tail -n 50
+          exit 1
 
       - name: SIT smoke (Newman)
         continue-on-error: true  # temporary
